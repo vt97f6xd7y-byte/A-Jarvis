@@ -14,4 +14,4 @@ An elite AI operating system powered by Claude AI with Gmail integration.
 Just open the link and start talking to JARVIS.
 
 ## Live Demo
-[Open JARVIS](https://YOUR-vt97f6xd7y-byte.github.io/jarvis/)
+[Open JARVIS](https://YOUR-.vt97f6xd7y-byte.github.io/jarvis/)
