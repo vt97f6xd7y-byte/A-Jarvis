@@ -2,7 +2,7 @@
 """Pull streamers' newest top clips (one main game plus a few others) and turn them into vertical Shorts.
 
 Usage:
-  python3 weekly_pull.py OUT_DIR [--channels lacy,xqc] [--game "Grand Theft Auto VI"]
+  python3 weekly_pull.py OUT_DIR [--channels lacy:14,xqc:4] [--game "Grand Theft Auto VI"]
                          [--range 7d] [--top 10]
 
 Clips already listed in done_clips.txt (next to this script) are skipped, and new
@@ -16,7 +16,9 @@ import argparse, json, os, subprocess, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 DONE = os.path.join(HERE, "done_clips.txt")
 ENV = dict(os.environ, HF_HUB_DISABLE_XET="1")
-CHANNELS = "lacy,caseoh_,xqc,kaicenat,stableronaldo,theburntpeanut"
+# channel[:clips] -- streamers with paid clip campaigns (Content Rewards pools for Lacy GTA 6,
+# Kai Cenat GTA 6, and StableRonaldo / CORE) get most of the slots; the rest stay in for reach.
+CHANNELS = "lacy:14,kaicenat:14,stableronaldo:12,caseoh_:4,xqc:4,theburntpeanut:3"
 
 
 def ytdlp_json(args):
@@ -40,10 +42,11 @@ def pick_clips(channel, game, rng, top, other, scan, done):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("out_dir")
-    ap.add_argument("--channels", default=CHANNELS, help="comma-separated Twitch usernames")
+    ap.add_argument("--channels", default=CHANNELS,
+                    help="comma-separated Twitch usernames, each optionally name:N to take N clips from that channel")
     ap.add_argument("--game", default="Grand Theft Auto VI")
     ap.add_argument("--range", default="7d", choices=["24hr", "7d", "30d", "all"])
-    ap.add_argument("--top", type=int, default=10, help="clips per channel in --game")
+    ap.add_argument("--top", type=int, default=10, help="clips per channel in --game when a channel has no :N")
     ap.add_argument("--other", type=int, default=3, help="extra clips per channel from other categories")
     ap.add_argument("--scan", type=int, default=60, help="how many top clips per channel to check for the game")
     a = ap.parse_args()
@@ -53,8 +56,9 @@ def main():
     os.makedirs(src_dir, exist_ok=True)
 
     picked = []
-    for ch in a.channels.split(","):
-        clips = pick_clips(ch, a.game, a.range, a.top, a.other, a.scan, done)
+    for entry in a.channels.split(","):
+        ch, _, n = entry.partition(":")
+        clips = pick_clips(ch, a.game, a.range, int(n) if n else a.top, a.other, a.scan, done)
         n_game = sum(a.game in (m.get("categories") or []) for m in clips)
         print(f"{ch}: {n_game} new {a.game} clips, {len(clips) - n_game} other clips", flush=True)
         picked += [dict(m, channel=ch) for m in clips]
