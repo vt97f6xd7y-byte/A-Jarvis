@@ -84,7 +84,7 @@ Clip from Lacy's GTA 6 stream on Twitch: twitch.tv/lacy
 ### 15_restart_game.mp4 (32s)
 **Title:** A fan asked Lacy to restart his 90 hour GTA 6 save 💀
 **Description:**
-"I'll restart the whole game for you, bro." Lacy is a man of the people. (He is not restarting anything.)
+"I don't want you to miss any of the content, so I'll restart the whole game for you." 90 hours, gone for one fan?
 Clip from Lacy's GTA 6 stream on Twitch: twitch.tv/lacy
 
 ---
