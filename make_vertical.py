@@ -45,6 +45,22 @@ def transcribe(model, path):
     return words
 
 
+def clean(words):
+    """Drop whisper's stuck-loop output: runs of 3+ words squeezed onto one timestamp."""
+    out = []
+    i = 0
+    while i < len(words):
+        j = i
+        while j + 1 < len(words) and abs(words[j + 1][0] - words[i][0]) < 0.05 and words[j + 1][1] - words[j + 1][0] < 0.05:
+            j += 1
+        if j - i >= 2:
+            i = j + 1
+            continue
+        out.append(tuple(words[i]))
+        i += 1
+    return out
+
+
 def chunk(words, max_words=3, max_chars=16):
     chunks, cur = [], []
     for i, w in enumerate(words):
@@ -76,7 +92,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     pop = r"{\fscx80\fscy80\t(0,90,\fscx105\fscy105)\t(90,160,\fscx100\fscy100)}"
     yel, wht = r"{\c&H00E5FF&}", r"{\c&HFFFFFF&}"
-    cs = chunk(words)
+    cs = chunk(clean(words))
     lines = []
     for i, c in enumerate(cs):
         end = c[-1][1] + 0.5
@@ -90,7 +106,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         f.write(hdr + "\n".join(lines) + "\n")
 
 
-def render(src, ass, out, cam_w, cam_h):
+def render(src, ass, out, cam_w, cam_h, game=None):
     # webcam: inset a few px to skip the overlay border, crop to the top panel's aspect, centered
     ch = cam_h - 4
     cw = round(ch * OUT_W / CAM_H)
@@ -98,6 +114,8 @@ def render(src, ass, out, cam_w, cam_h):
     # game: square from the middle, below the chat box and above the bottom HUD / stream captions
     gx = 590 if cam_w > 520 else 560
     gy, gs = 180, 840
+    if game:  # manual override "x,y,size" for clips where the action sits elsewhere
+        gx, gy, gs = game
     fc = (f"[0:v]crop={cw}:{ch}:{cx}:2,scale={OUT_W}:{CAM_H}:flags=lanczos,setsar=1[cam];"
           f"[0:v]crop={gs}:{gs}:{gx}:{gy},scale={OUT_W}:{GAME_H}:flags=lanczos,setsar=1[game];"
           f"[cam][game]vstack=inputs=2,ass={ass}[v]")
@@ -112,18 +130,27 @@ def main():
     ap.add_argument("clips", nargs="+")
     ap.add_argument("--cam", default="494x276")
     ap.add_argument("--model", default="medium.en")
+    ap.add_argument("--game", help="game crop override x,y,size (square, source pixels)")
+    ap.add_argument("--reuse", action="store_true", help="reuse saved transcripts, only re-render")
     a = ap.parse_args()
     cam_w, cam_h = map(int, a.cam.split("x"))
     os.makedirs(a.out_dir, exist_ok=True)
-    from faster_whisper import WhisperModel
-    model = WhisperModel(a.model, device="cpu", compute_type="int8")
+    game = tuple(map(int, a.game.split(","))) if a.game else None
+    model = None
+    if not a.reuse:
+        from faster_whisper import WhisperModel
+        model = WhisperModel(a.model, device="cpu", compute_type="int8")
     for src in a.clips:
         name = os.path.splitext(os.path.basename(src))[0]
-        words = transcribe(model, src)
-        json.dump(words, open(os.path.join(a.out_dir, name + ".words.json"), "w"))
+        wpath = os.path.join(a.out_dir, name + ".words.json")
+        if a.reuse:
+            words = json.load(open(wpath))
+        else:
+            words = transcribe(model, src)
+            json.dump(words, open(wpath, "w"))
         ass = os.path.join(a.out_dir, name + ".ass")
         write_ass(words, ass)
-        render(src, ass, os.path.join(a.out_dir, name + ".mp4"), cam_w, cam_h)
+        render(src, ass, os.path.join(a.out_dir, name + ".mp4"), cam_w, cam_h, game)
         print("done", name, len(words), "words", flush=True)
 
 
