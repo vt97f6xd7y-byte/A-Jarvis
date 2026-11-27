@@ -166,7 +166,8 @@ def detect_cam(src, samples=12):
         if len(raw) != W * H * 3:
             continue
         for (x, y, w, h) in detect(np.frombuffer(raw, np.uint8).reshape(H, W, 3)):
-            hits.append((i, x, y, w, h))
+            if w <= 110:  # webcam-overlay faces stay under ~220px; bigger ones mean a full-screen camera
+                hits.append((i, x, y, w, h))
     clusters = []
     for hit in hits:
         i, x, y, w, h = hit
@@ -196,9 +197,53 @@ def overlap(a, b):
     return max(0, min(ax + aw, bx + bw) - max(ax, bx)) * max(0, min(ay + ah, by + bh) - max(ay, by))
 
 
-def auto_layout(src, face=None):
+def detect_main_face(src, samples=10):
+    """Find a big face that holds roughly still across the clip (Just Chatting / IRL, where the
+    streamer fills the screen). Returns (x, y, w, h) in source pixels or None."""
+    import dlib
+    cnn = dlib.cnn_face_detection_model_v1(FACE_MODEL)
+    W, H, k = 960, 540, 2
+    dur = probe_duration(src)
+    hits = []
+    for i in range(samples):
+        t = dur * (i + 0.5) / samples
+        raw = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{t:.2f}", "-i", src, "-frames:v", "1",
+                              "-vf", f"scale={W}:{H}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                             capture_output=True).stdout
+        if len(raw) == W * H * 3:
+            for r in cnn(np.frombuffer(raw, np.uint8).reshape(H, W, 3), 0):
+                hits.append((i, r.rect.left(), r.rect.top(), r.rect.width(), r.rect.height()))
+    clusters = []
+    for hit in sorted(hits, key=lambda h: -h[3]):
+        i, x, y, w, h = hit
+        for c in clusters:
+            _, cx, cy, cw, _ = c[0]
+            if abs((x + w / 2) - (cx + cw / 2)) < 1.0 * cw:
+                c.append(hit); break
+        else:
+            clusters.append([hit])
+    steady = [c for c in clusters if len({h[0] for h in c}) >= max(3, samples // 3)]
+    if len(steady) != 1:  # nobody, or several people sharing the screen: show the whole frame instead
+        return None
+    return tuple(int(np.median([h[j] for h in steady[0]]) * k) for j in (1, 2, 3, 4))
+
+
+PORTRAIT_W, PORTRAIT_H = 540, 960  # 9:16 from the top 960px, scaled 2x; skips the stream's own captions below
+
+
+def portrait_layout(face):
+    fx, fy, fw, fh = face
+    x = int(min(max(fx + fw / 2 - PORTRAIT_W / 2, 0), 1920 - PORTRAIT_W))
+    return {"mode": "portrait", "crop": (x, 0, PORTRAIT_W, PORTRAIT_H), "face": face}
+
+
+def auto_layout(src, face=None, irl=False):
     face = face or detect_cam(src)
     if face is None:
+        if irl:  # no corner webcam: if the streamer fills the screen, follow their face in a 9:16 crop
+            big = detect_main_face(src)
+            if big:
+                return portrait_layout(big)
         return {"mode": "blur"}
     fx, fy, fw, fh = face
     ch = min(1080, int(fh * 3.4)) // 2 * 2
@@ -211,6 +256,10 @@ def auto_layout(src, face=None):
     options = [580, 760, 400, 1120, 40]
     gx = min(options, key=lambda x: (overlap(foot, (x, gy, gs, gs)) > 0.05 * fw * fh * 9, options.index(x)))
     return {"mode": "stack", "cam": (cx, cy, cw, ch), "game": (gx, gy, gs), "face": face}
+
+
+def auto_layout_irl(src):
+    return auto_layout(src, irl=True)
 
 
 def fixed_layout(cam_w, cam_h, game=None):
@@ -228,7 +277,7 @@ BLUR_FG_Y = (1920 - BLUR_FG_H) // 2
 
 
 def caption_y(layout):
-    return SEAM_Y if layout["mode"] == "stack" else BLUR_FG_Y + BLUR_FG_H + 130
+    return {"stack": SEAM_Y, "portrait": 1460}.get(layout["mode"], BLUR_FG_Y + BLUR_FG_H + 130)
 
 
 def render(src, ass, out, layout):
@@ -238,6 +287,9 @@ def render(src, ass, out, layout):
         fc = (f"[0:v]crop={cw}:{ch}:{cx}:{cy},scale={OUT_W}:{CAM_H}:flags=lanczos,setsar=1[cam];"
               f"[0:v]crop={gs}:{gs}:{gx}:{gy},scale={OUT_W}:{GAME_H}:flags=lanczos,setsar=1[game];"
               f"[cam][game]vstack=inputs=2,ass={ass}[v]")
+    elif layout["mode"] == "portrait":
+        x, y, w, h = layout["crop"]
+        fc = f"[0:v]crop={w}:{h}:{x}:{y},scale={OUT_W}:1920:flags=lanczos,setsar=1,ass={ass}[v]"
     else:  # no face cam: full game view over a blurred copy, cropped above the stream's captions
         fc = (f"[0:v]split[a][b];[a]scale=-2:1920,crop=1080:1920,boxblur=30:3,eq=brightness=-0.15[bg];"
               f"[b]crop=1920:910:0:0,scale={OUT_W}:{BLUR_FG_H}:flags=lanczos,setsar=1[fg];"
@@ -251,7 +303,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("out_dir")
     ap.add_argument("clips", nargs="+")
-    ap.add_argument("--cam", default="494x276", help='webcam box WxH in the top-left corner, "auto" to find it, x,y,w,h for an exact box, or "none" for the full-game blur layout')
+    ap.add_argument("--cam", default="494x276", help='webcam box WxH in the top-left corner, "auto" to find it, "auto-irl" to also try a face-following 9:16 crop for Just Chatting/IRL clips, x,y,w,h for an exact box, or "none" for the full-game blur layout')
     ap.add_argument("--model", default="medium.en")
     ap.add_argument("--game", help="game crop override x,y,size (square, source pixels)")
     ap.add_argument("--reuse", action="store_true", help="reuse saved transcripts, only re-render")
@@ -267,7 +319,7 @@ def main():
         if a.cam.count(",") == 3:  # exact webcam box x,y,w,h from a manual check
             x, y, w, h = map(int, a.cam.split(","))
             return auto_layout(src, face=(x + w // 3, y + h // 3, w // 3, h // 3))
-        if a.cam != "auto":
+        if a.cam not in ("auto", "auto-irl"):
             return fixed_layout(*map(int, a.cam.split("x")))
         if a.reuse and os.path.exists(lpath):
             return json.load(open(lpath))
@@ -278,7 +330,8 @@ def main():
     if todo:  # face detection is the slow part, so spread it over the CPU cores
         from concurrent.futures import ProcessPoolExecutor
         with ProcessPoolExecutor(min(4, os.cpu_count() or 1)) as ex:
-            for i, L in zip(todo, ex.map(auto_layout, [a.clips[i] for i in todo])):
+            detect = auto_layout_irl if a.cam == "auto-irl" else auto_layout
+            for i, L in zip(todo, ex.map(detect, [a.clips[i] for i in todo])):
                 layouts[i] = L
 
     model = None
