@@ -33,7 +33,10 @@ def transcribe(model, path):
     try:
         segs = list(model.transcribe(audio, **opts)[0])
     except IndexError:  # faster-whisper alignment bug on empty segments; skip silence and retry
-        segs = list(model.transcribe(audio, vad_filter=True, **opts)[0])
+        try:
+            segs = list(model.transcribe(audio, vad_filter=True, **opts)[0])
+        except IndexError:  # still failing: transcribe without word timing and spread words over each segment
+            return even_words(model.transcribe(audio, **dict(opts, word_timestamps=False))[0])
     words = []
     for s in segs:
         if s.text.strip().lower() in HALLUCINATIONS or s.avg_logprob < -1.2:
@@ -46,6 +49,18 @@ def transcribe(model, path):
                 words[-1] = (words[-1][0], x.end, words[-1][2] + t)
             else:
                 words.append((x.start, x.end, t))
+    return words
+
+
+def even_words(segs):
+    """Word timings estimated by spreading each segment's words evenly over its span."""
+    words = []
+    for s in segs:
+        if s.text.strip().lower() in HALLUCINATIONS or s.avg_logprob < -1.2:
+            continue
+        toks = s.text.split()
+        step = (s.end - s.start) / max(len(toks), 1)
+        words += [(s.start + i * step, s.start + (i + 1) * step, t) for i, t in enumerate(toks)]
     return words
 
 
@@ -306,7 +321,7 @@ def main():
     ap.add_argument("--cam", default="494x276", help='webcam box WxH in the top-left corner, "auto" to find it, "auto-irl" to also try a face-following 9:16 crop for Just Chatting/IRL clips, x,y,w,h for an exact box, or "none" for the full-game blur layout')
     ap.add_argument("--model", default="medium.en")
     ap.add_argument("--game", help="game crop override x,y,size (square, source pixels)")
-    ap.add_argument("--reuse", action="store_true", help="reuse saved transcripts, only re-render")
+    ap.add_argument("--reuse", action="store_true", help="(kept for compatibility: saved transcripts and layouts are always reused)")
     a = ap.parse_args()
     os.makedirs(a.out_dir, exist_ok=True)
     game = tuple(map(int, a.game.split(","))) if a.game else None
@@ -321,7 +336,7 @@ def main():
             return auto_layout(src, face=(x + w // 3, y + h // 3, w // 3, h // 3))
         if a.cam not in ("auto", "auto-irl"):
             return fixed_layout(*map(int, a.cam.split("x")))
-        if a.reuse and os.path.exists(lpath):
+        if os.path.exists(lpath):  # already detected (rerun or resumed batch)
             return json.load(open(lpath))
         return None  # detect below, in parallel
 
@@ -333,16 +348,17 @@ def main():
             detect = auto_layout_irl if a.cam == "auto-irl" else auto_layout
             for i, L in zip(todo, ex.map(detect, [a.clips[i] for i in todo])):
                 layouts[i] = L
+                json.dump(L, open(lpaths[i], "w"))  # saved now so a crash later doesn't redo detection
 
     model = None
-    if not a.reuse:
+    if not all(os.path.exists(os.path.join(a.out_dir, n + ".words.json")) for n in names):
         from faster_whisper import WhisperModel
         model = WhisperModel(a.model, device="cpu", compute_type="int8")
     for src, name, lpath, layout in zip(a.clips, names, lpaths, layouts):
         if game and layout["mode"] == "stack":
             layout["game"] = game
         wpath = os.path.join(a.out_dir, name + ".words.json")
-        if a.reuse:
+        if os.path.exists(wpath):  # transcribed already (rerun or resumed batch)
             words = json.load(open(wpath))
         else:
             words = transcribe(model, src)
