@@ -28,8 +28,12 @@ def transcribe(model, path):
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", path, "-ac", "1", "-ar", "16000", wav], check=True)
         w = wave.open(wav)
         audio = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32) / 32768
-    segs, _ = model.transcribe(audio, word_timestamps=True, condition_on_previous_text=False,
-                               no_speech_threshold=None, log_prob_threshold=None, beam_size=5)
+    opts = dict(word_timestamps=True, condition_on_previous_text=False,
+                no_speech_threshold=None, log_prob_threshold=None, beam_size=5)
+    try:
+        segs = list(model.transcribe(audio, **opts)[0])
+    except IndexError:  # faster-whisper alignment bug on empty segments; skip silence and retry
+        segs = list(model.transcribe(audio, vad_filter=True, **opts)[0])
     words = []
     for s in segs:
         if s.text.strip().lower() in HALLUCINATIONS or s.avg_logprob < -1.2:
