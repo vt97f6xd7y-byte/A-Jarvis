@@ -116,8 +116,8 @@ def render(src, ass, out, cam_w, cam_h, game=None):
     cw = round(ch * OUT_W / CAM_H)
     cx = max(0, (cam_w - cw) // 2)
     # game: square from the middle, below the chat box and above the bottom HUD / stream captions
-    gx = 590 if cam_w > 520 else 570
-    gy, gs = 160, 780  # stops above the stream's own captions and in-game subtitles (~y950)
+    gx = 600 if cam_w > 520 else 580
+    gy, gs = 150, 760  # ends at y910, above the stream captions and two-line in-game subtitles (~y925)
     if game:  # manual override "x,y,size" for clips where the action sits elsewhere
         gx, gy, gs = game
     fc = (f"[0:v]crop={cw}:{ch}:{cx}:2,scale={OUT_W}:{CAM_H}:flags=lanczos,setsar=1[cam];"
