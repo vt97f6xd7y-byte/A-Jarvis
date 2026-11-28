@@ -44,7 +44,7 @@ Clip from Lacy's GTA 6 stream on Twitch: twitch.tv/lacy
 Lacy was ready for the big outfit reveal. Lucia had other plans.
 Clip from Lacy's GTA 6 stream on Twitch: twitch.tv/lacy
 
-### 07_omg.mp4(23s)
+### 07_omg.mp4 (23s)
 **Title:** Lacy's reaction to Lucia waking up 😳 GTA 6
 **Description:**
 "Where are you going? GOD DAMN! Oh my God, Lucia!" Lacy was not prepared.
